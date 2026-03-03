@@ -12,7 +12,6 @@ import os
 import sys
 import pyodbc
 from pathlib import Path
-from datetime import datetime
 
 #env requires "pip install pyodbc pandas" for SQL actions
 
@@ -125,9 +124,12 @@ FILES = {
 
 #SQL CODE
 DDL = """
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'bronze') EXEC('CREATE SCHEMA bronze');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'silver') EXEC('CREATE SCHEMA silver');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'audit') EXEC('CREATE SCHEMA audit');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'bronze') EXEC('CREATE SCHEMA bronze')
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'silver') EXEC('CREATE SCHEMA silver')
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'audit') EXEC('CREATE SCHEMA audit')
+GO
 
 -- Bronze (all strings)
 IF OBJECT_ID('bronze.books_raw','U') IS NULL
@@ -142,7 +144,8 @@ BEGIN
         SourceFile NVARCHAR(255) NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 
 IF OBJECT_ID('bronze.customers_raw','U') IS NULL
 BEGIN
@@ -152,7 +155,8 @@ BEGIN
         SourceFile NVARCHAR(255) NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 
 -- Silver (typed)
 IF OBJECT_ID('silver.books_clean','U') IS NULL
@@ -167,7 +171,8 @@ BEGIN
         DaysBorrowed INT NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 
 IF OBJECT_ID('silver.customers_clean','U') IS NULL
 BEGIN
@@ -176,7 +181,8 @@ BEGIN
         CustomerName NVARCHAR(255) NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 
 -- Audit / errors (store raw + flags)
 IF OBJECT_ID('audit.books_errors','U') IS NULL
@@ -193,7 +199,8 @@ BEGIN
         SourceFile NVARCHAR(255) NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 
 IF OBJECT_ID('audit.customers_errors','U') IS NULL
 BEGIN
@@ -204,7 +211,8 @@ BEGIN
         SourceFile NVARCHAR(255) NULL,
         LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
-END;
+END
+GO
 """
 
 #-----------------------------------------------------------------
@@ -268,13 +276,37 @@ print("Cleaned files saved.")
 
 print("Loading data to SQL Database: Newham Library...")
 
-#SQL connect
+#------------------------------------------------------------------------
+#SQL FUNCTIONS
+
 def connect():
     return pyodbc.connect(CONN_STR)
 
+#sql RUN TABLE CREATION
 def run_ddl(conn):
     cur = conn.cursor()
-    cur.execute(DDL)
+
+    # Split batches on lines that contain only GO
+    batches = []
+    current = []
+
+    for line in DDL.splitlines():
+        if line.strip().upper() == "GO":
+            batch = "\n".join(current).strip()
+            if batch:
+                batches.append(batch)
+            current = []
+        else:
+            current.append(line)
+
+    # last batch
+    last = "\n".join(current).strip()
+    if last:
+        batches.append(last)
+
+    for batch in batches:
+        cur.execute(batch)
+
     conn.commit()
 
 def insert_df(conn, table_name, df):
@@ -288,6 +320,45 @@ def insert_df(conn, table_name, df):
     cur.fast_executemany = True
     cur.executemany(sql, df.where(pd.notnull(df), None).values.tolist())
     conn.commit()
+
+def insert_df_raw_strings(conn, table_name, df):
+    # Force everything to string/None so NVARCHAR inserts don't hit numeric issues
+    df2 = df.copy()
+
+    # Convert pandas NA/NaN to None
+    df2 = df2.where(pd.notnull(df2), None)
+
+    # Convert non-None values to string
+    for col in df2.columns:
+        df2[col] = df2[col].map(lambda x: None if x is None else str(x))
+
+    cols = list(df2.columns)
+    placeholders = ",".join(["?"] * len(cols))
+    col_list = ",".join([f"[{c}]" for c in cols])
+
+    sql = f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"
+    cur = conn.cursor()
+    cur.fast_executemany = True
+    cur.executemany(sql, df2.values.tolist())
+    conn.commit()
+
+def prep_books_for_silver(df):
+    df = df.copy()
+
+    # numeric columns → nullable ints
+    for col in ["Id", "CustomerID", "AllowedDays"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").round().astype("Int64")
+
+    # dates → python date objects
+    for col in ["CheckoutDate", "ReturnDate"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+
+    # pandas missing values → None (so SQL gets NULL)
+    df = df.astype(object).where(pd.notnull(df), None)
+
+    return df
 
 def main():
     # Basic file checks
@@ -309,11 +380,11 @@ def main():
     
     books_raw = pd.read_csv(FILES["books_raw"], dtype=str)
     books_raw["SourceFile"] = FILES["books_raw"].name
-    insert_df(conn, "bronze.books_raw", books_raw)
+    insert_df_raw_strings(conn, "bronze.books_raw", books_raw)
 
     customers_raw = pd.read_csv(FILES["customers_raw"], dtype=str)
     customers_raw["SourceFile"] = FILES["customers_raw"].name
-    insert_df(conn, "bronze.customers_raw", customers_raw)
+    insert_df_raw_strings(conn, "bronze.customers_raw", customers_raw)
 
     #SILVER LOAD
 
@@ -327,18 +398,16 @@ def main():
         books_clean = books_clean.rename(columns={"Book checkout": "CheckoutDate"})
     if "Book Returned" in books_clean.columns:
         books_clean = books_clean.rename(columns={"Book Returned": "ReturnDate"})
+    if "Allowed Days" in books_clean.columns:
+        books_clean = books_clean.rename(columns={"Allowed Days": "AllowedDays"})
 
+    books_clean_subset = books_clean[[
+        "Id", "BookTitle", "CheckoutDate", "ReturnDate", "AllowedDays", "CustomerID"
+    ]]
 
-    insert_df(conn, "silver.books_clean", books_clean[[
-        "Id", "BookTitle", "CheckoutDate", "ReturnDate", "Allowed Days", "CustomerID"
-    ]].rename(columns={"Allowed Days": "AllowedDays"}))
+    books_clean_subset = prep_books_for_silver(books_clean_subset)
 
-    customers_clean = pd.read_csv(FILES["customers_clean"])
-    customers_clean = customers_clean.rename(columns={
-        "Customer ID": "CustomerID",
-        "Customer Name": "CustomerName"
-    })
-    insert_df(conn, "silver.customers_clean", customers_clean[["CustomerID", "CustomerName"]])
+    insert_df(conn, "silver.books_clean", books_clean_subset)
 
     #AUDIT LOAD
 
@@ -353,17 +422,25 @@ def main():
     if "Customer ID" in books_err.columns:
         books_err = books_err.rename(columns={"Customer ID": "CustomerID"})
 
-    insert_df(conn, "audit.books_errors", books_err.reindex(columns=[
+    audit_books = books_err.reindex(columns=[
         "Id", "BookTitle", "CheckoutRaw", "ReturnRaw", "CustomerID",
         "Invalid Checkout Date", "Invalid Return Date", "Checkout After Return"
     ], fill_value=None).rename(columns={
         "Invalid Checkout Date": "InvalidCheckoutDate",
         "Invalid Return Date": "InvalidReturnDate",
         "Checkout After Return": "CheckoutAfterReturn"
-    }).assign(SourceFile=FILES["books_raw"].name))
+    }).assign(SourceFile=FILES["books_raw"].name)
+
+# Convert flags to 0/1 so they insert cleanly into BIT columns
+    for c in ["InvalidCheckoutDate", "InvalidReturnDate", "CheckoutAfterReturn"]:
+        audit_books[c] = audit_books[c].map(lambda x: 1 if str(x).strip().lower() in ("true", "1", "yes") else 0)
+
+    insert_df(conn, "audit.books_errors", audit_books)
 
 
 
     conn.close()
     print("sql tables loaded.")
 
+if __name__ == "__main__":
+    main()
