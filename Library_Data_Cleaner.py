@@ -71,6 +71,19 @@ def convert_to_date(df, column_name):
         errors="coerce"
     )
 
+def calculate_days_between_dates(df, start_col, end_col, new_col="LoanPeriodDays"):
+
+    df = df.copy()
+
+    # Ensure datetime (safe if already datetime)
+    df[start_col] = pd.to_datetime(df[start_col], errors="coerce")
+    df[end_col] = pd.to_datetime(df[end_col], errors="coerce")
+
+    # Timedelta -> days (float if NaT involved), then to nullable Int64
+    df[new_col] = (df[end_col] - df[start_col]).dt.days.astype("Int64")
+
+    return df
+
 def convert_weeks_to_days(df):
 
     df["Allowed Days"] = (
@@ -160,6 +173,15 @@ convert_to_date(books_df, "Book checkout")
 convert_to_date(books_df, "Book Returned")
 
 print("Date conversion complete.")
+
+# Calc book loan period
+
+books_df = calculate_days_between_dates(
+    books_df,
+    start_col="Book checkout",
+    end_col="Book Returned",
+    new_col="LoanPeriodDays"
+)
 
 # convert weeks to days
 
