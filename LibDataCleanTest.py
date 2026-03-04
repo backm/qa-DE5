@@ -20,7 +20,7 @@ class TestLoanPeriod(unittest.TestCase):
         expected = [4, 0, pd.NA, -2]
         actual = out["LoanPeriodDays"].tolist()
 
-        # `pd.NA` is awkward with direct equality, so handle it:
+        # 
         self.assertEqual(actual[0], expected[0])
         self.assertEqual(actual[1], expected[1])
         self.assertTrue(pd.isna(actual[2]))

@@ -34,7 +34,7 @@ OPTIONAL = [
 
 #-----------------------------------------------------------------
 
-#FUNCTIONS
+#CLEANER FUNCTIONS
 
 
 def check_file_exists(file_path):
@@ -114,7 +114,7 @@ def validate_book_data(df):
     return bad_rows
 
 #-----------------------------------------------------------------
-#SQL FUNCTIONS
+#SQL CONFIG
 
 SERVER = r"localhost"
 DATABASE = "NewhamLibrary"
@@ -136,10 +136,6 @@ FILES = {
     "books_raw": DATA_DIR / "03_Library Systembook.csv",
     "customers_raw": DATA_DIR / "03_Library SystemCustomers.csv",
 }
-
-#SQL CODE
-DDL = """
-    """
 
 #-----------------------------------------------------------------
 #RUN
@@ -217,33 +213,6 @@ print("Loading data to SQL Database: Newham Library...")
 def connect():
     return pyodbc.connect(CONN_STR)
 
-#sql RUN TABLE CREATION
-def run_ddl(conn):
-    cur = conn.cursor()
-
-    # Split batches on lines that contain only GO
-    batches = []
-    current = []
-
-    for line in DDL.splitlines():
-        if line.strip().upper() == "GO":
-            batch = "\n".join(current).strip()
-            if batch:
-                batches.append(batch)
-            current = []
-        else:
-            current.append(line)
-
-    # last batch
-    last = "\n".join(current).strip()
-    if last:
-        batches.append(last)
-
-    for batch in batches:
-        cur.execute(batch)
-
-    conn.commit()
-
 def insert_df(conn, table_name, df):
     cols = list(df.columns)
     placeholders = ",".join(["?"] * len(cols))
@@ -259,13 +228,11 @@ def insert_df(conn, table_name, df):
     conn.commit()
 
 def insert_df_raw_strings(conn, table_name, df):
-    # Force everything to string/None so NVARCHAR inserts don't hit numeric issues
+
     df2 = df.copy()
 
-    # Convert pandas NA/NaN to None
     df2 = df2.where(pd.notnull(df2), None)
 
-    # Convert non-None values to string
     for col in df2.columns:
         df2[col] = df2[col].map(lambda x: None if x is None else str(x))
 
@@ -282,17 +249,14 @@ def insert_df_raw_strings(conn, table_name, df):
 def prep_books_for_silver(df):
     df = df.copy()
 
-    # numeric columns → nullable ints
     for col in ["Id", "CustomerID", "AllowedDays"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").round().astype("Int64")
 
-    # dates → python date objects
     for col in ["CheckoutDate", "ReturnDate"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
 
-    # pandas missing values → None (so SQL gets NULL)
     df = df.astype(object).where(pd.notnull(df), None)
 
     return df
@@ -311,8 +275,7 @@ def main():
     print("Required files found. Continuing...")
 
     conn = connect()
-    run_ddl(conn)
-
+  
     #BRONZE LOAD
     
     books_raw = pd.read_csv(FILES["books_raw"], dtype=str)
@@ -373,8 +336,6 @@ def main():
         audit_books[c] = audit_books[c].map(lambda x: 1 if str(x).strip().lower() in ("true", "1", "yes") else 0)
 
     insert_df(conn, "audit.books_errors", audit_books)
-
-
 
     conn.close()
     print("sql tables loaded.")
