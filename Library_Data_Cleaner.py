@@ -18,6 +18,8 @@ from pathlib import Path
 books_file = "Data/03_Library Systembook.csv"
 customers_file = "Data/03_Library SystemCustomers.csv"
 
+
+#for sql import - doesnt fail if there are no errors
 REQUIRED = [
     "books_raw",
     "customers_raw",
@@ -124,96 +126,7 @@ FILES = {
 
 #SQL CODE
 DDL = """
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'bronze') EXEC('CREATE SCHEMA bronze')
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'silver') EXEC('CREATE SCHEMA silver')
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'audit') EXEC('CREATE SCHEMA audit')
-GO
-
--- Bronze (all strings)
-IF OBJECT_ID('bronze.books_raw','U') IS NULL
-BEGIN
-    CREATE TABLE bronze.books_raw (
-        Id NVARCHAR(255) NULL,
-        Books NVARCHAR(255) NULL,
-        [Book checkout] NVARCHAR(255) NULL,
-        [Book Returned] NVARCHAR(255) NULL,
-        [Days allowed to borrow] NVARCHAR(255) NULL,
-        [Customer ID] NVARCHAR(255) NULL,
-        SourceFile NVARCHAR(255) NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-
-IF OBJECT_ID('bronze.customers_raw','U') IS NULL
-BEGIN
-    CREATE TABLE bronze.customers_raw (
-        [Customer ID] NVARCHAR(255) NULL,
-        [Customer Name] NVARCHAR(255) NULL,
-        SourceFile NVARCHAR(255) NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-
--- Silver (typed)
-IF OBJECT_ID('silver.books_clean','U') IS NULL
-BEGIN
-    CREATE TABLE silver.books_clean (
-        Id INT NULL,
-        BookTitle NVARCHAR(255) NULL,
-        CheckoutDate DATE NULL,
-        ReturnDate DATE NULL,
-        AllowedDays INT NULL,
-        CustomerID INT NULL,
-        DaysBorrowed INT NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-
-IF OBJECT_ID('silver.customers_clean','U') IS NULL
-BEGIN
-    CREATE TABLE silver.customers_clean (
-        CustomerID INT NULL,
-        CustomerName NVARCHAR(255) NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-
--- Audit / errors (store raw + flags)
-IF OBJECT_ID('audit.books_errors','U') IS NULL
-BEGIN
-    CREATE TABLE audit.books_errors (
-        Id NVARCHAR(255) NULL,
-        BookTitle NVARCHAR(255) NULL,
-        CheckoutRaw NVARCHAR(255) NULL,
-        ReturnRaw NVARCHAR(255) NULL,
-        CustomerID NVARCHAR(255) NULL,
-        InvalidCheckoutDate BIT NULL,
-        InvalidReturnDate BIT NULL,
-        CheckoutAfterReturn BIT NULL,
-        SourceFile NVARCHAR(255) NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-
-IF OBJECT_ID('audit.customers_errors','U') IS NULL
-BEGIN
-    CREATE TABLE audit.customers_errors (
-        CustomerID NVARCHAR(255) NULL,
-        CustomerName NVARCHAR(255) NULL,
-        Reason NVARCHAR(255) NULL,
-        SourceFile NVARCHAR(255) NULL,
-        LoadDts DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-END
-GO
-"""
+    """
 
 #-----------------------------------------------------------------
 #RUN
@@ -310,7 +223,6 @@ def run_ddl(conn):
     conn.commit()
 
 def insert_df(conn, table_name, df):
-    # Simple row-by-row insert (fine for small datasets)
     cols = list(df.columns)
     placeholders = ",".join(["?"] * len(cols))
     col_list = ",".join([f"[{c}]" for c in cols])
@@ -318,7 +230,10 @@ def insert_df(conn, table_name, df):
     sql = f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"
     cur = conn.cursor()
     cur.fast_executemany = True
-    cur.executemany(sql, df.where(pd.notnull(df), None).values.tolist())
+
+    rows = df.astype(object).where(pd.notnull(df), None).values.tolist()
+    cur.executemany(sql, rows)
+
     conn.commit()
 
 def insert_df_raw_strings(conn, table_name, df):
