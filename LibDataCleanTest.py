@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 
-from Library_Data_Cleaner import calculate_days_between_dates
+from Library_Data_Cleaner import calculate_days_between_dates, clean_text_column
 
 
 class TestLoanPeriod(unittest.TestCase):
@@ -26,6 +26,13 @@ class TestLoanPeriod(unittest.TestCase):
         self.assertTrue(pd.isna(actual[2]))
         self.assertEqual(actual[3], expected[3])
 
+class TestCleaner(unittest.TestCase):
+    def test_clean_text_column_strips_quotes_and_whitespace(self):
+        df = pd.DataFrame({"Books": ['  "Harry Potter"  ', '"Dune"', "  Neuromancer  "]})
+        clean_text_column(df, "Books")
+        self.assertEqual(df.loc[0, "Books"], "Harry Potter")
+        self.assertEqual(df.loc[1, "Books"], "Dune")
+        self.assertEqual(df.loc[2, "Books"], "Neuromancer")
 
 if __name__ == "__main__":
     unittest.main()

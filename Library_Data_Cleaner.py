@@ -309,6 +309,18 @@ def main():
 
     insert_df(conn, "silver.books_clean", books_clean_subset)
 
+    customers_clean = pd.read_csv(FILES["customers_clean"], dtype=str)
+
+    customers_clean = customers_clean.rename(columns={
+        "Customer ID": "CustomerID",
+        "Customer Name": "CustomerName"
+    })
+
+    customers_clean["CustomerID"] = pd.to_numeric(customers_clean["CustomerID"], errors="coerce").astype("Int64")
+    customers_clean = customers_clean.astype(object).where(pd.notnull(customers_clean), None)
+
+    insert_df(conn, "silver.customers_clean", customers_clean)
+
     #AUDIT LOAD
 
     books_err = pd.read_csv(FILES["books_errors"], dtype=str)
@@ -331,7 +343,6 @@ def main():
         "Checkout After Return": "CheckoutAfterReturn"
     }).assign(SourceFile=FILES["books_raw"].name)
 
-# Convert flags to 0/1 so they insert cleanly into BIT columns
     for c in ["InvalidCheckoutDate", "InvalidReturnDate", "CheckoutAfterReturn"]:
         audit_books[c] = audit_books[c].map(lambda x: 1 if str(x).strip().lower() in ("true", "1", "yes") else 0)
 
