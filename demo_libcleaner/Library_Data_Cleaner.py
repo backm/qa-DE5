@@ -15,8 +15,8 @@ from pathlib import Path
 
 #env requires "pip install pyodbc pandas" for SQL actions
 
-books_file = "Data/03_Library Systembook.csv"
-customers_file = "Data/03_Library SystemCustomers.csv"
+books_file = "data/03_Library Systembook.csv"
+customers_file = "data/03_Library SystemCustomers.csv"
 
 
 #for sql import - doesnt fail if there are no errors

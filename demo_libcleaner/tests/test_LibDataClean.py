@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 
-from Library_Data_Cleaner import calculate_days_between_dates, clean_text_column
+from library_scripts.Library_Data_Cleaner import calculate_days_between_dates, clean_text_column
 
 
 class TestLoanPeriod(unittest.TestCase):
